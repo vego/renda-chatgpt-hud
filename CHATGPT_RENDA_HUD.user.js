@@ -1057,7 +1057,7 @@
     #${HUD_ID} .rv-nav .rv-conn { margin-left: auto; height: 30px; border-radius: 15px; border-color: var(--rv-line); background: var(--rv-panel-2); }
     #${HUD_ID} .rv-nav .rv-conn[hidden] { display: none; }
     /* v4.47.0: comutatorul de organizatie (doar cand contul are mai multe) */
-    #${HUD_ID} .rv-nav .rv-org { margin-left: auto; height: 30px; max-width: 170px; padding: 0 10px; border: 1px solid var(--rv-line); border-radius: 15px; background: var(--rv-panel-2); color: var(--rv-text); font: inherit; cursor: pointer; }
+    #${HUD_ID} .rv-nav .rv-org { margin-left: auto; height: 30px; max-width: 130px; padding: 0 8px; text-overflow: ellipsis; border: 1px solid var(--rv-line); border-radius: 15px; background: var(--rv-panel-2); color: var(--rv-text); font: inherit; cursor: pointer; }
     #${HUD_ID} .rv-nav .rv-org[hidden] { display: none; }
     /* v4.47.0: banda incape in 1280 px — linkul spre serverul HUD local apare doar cand acesta raspunde, tema
        ramane iconita sub 1500 px (cuvantul ei e in tooltip), iar sub 1400 px dispare eticheta „pagini:” */
