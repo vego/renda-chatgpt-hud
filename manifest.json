@@ -1,14 +1,14 @@
 {
   "manifest_version": 3,
   "name": "RENDA VIGILIA HUD pentru ChatGPT",
-  "version": "4.36.2",
-  "description": "Carcasă vizuală RENDA/VIGILIA peste ChatGPT + monitor CPU/RAM din HUD-ul local. Nu citește și nu transmite conversațiile.",
+  "version": "4.37.0",
+  "description": "Bara RENDA/VIGILIA peste ChatGPT. Canonul citește textul de trimis doar local (HUD 127.0.0.1); conversațiile nu pleacă spre RENDA.",
   "author": "Virgil Profeanu",
   "minimum_chrome_version": "120",
   "icons": {
     "128": "icon128.png"
   },
-  "permissions": ["userScripts", "alarms", "storage"],
+  "permissions": ["userScripts", "alarms", "storage", "identity"],
   "host_permissions": [
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",

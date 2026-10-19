@@ -10,11 +10,14 @@ PowerShell, cross-platform.
 | Fișier | Rol |
 |---|---|
 | `CHATGPT_RENDA_HUD.user.js` | **Unicul fișier de întreținut.** Codul HUD. În pachet e doar „sămânța" primei rulări; după aceea versiunea vie stă în `chrome.storage` și se actualizează din GitHub |
-| `background.js` | Service worker, două roluri: (1) proxy spre serverul HUD local `127.0.0.1:8765` (echivalentul `GM_xmlhttpRequest` + `@connect`); (2) la 10 min aduce userscript-ul de pe GitHub și, dacă `@version` e mai nou (semver), îl re-înregistrează prin `chrome.userScripts` — niciodată downgrade |
-| `manifest.json` | MV3 HIBRID: **`content_scripts` injectează direct `CHATGPT_RENDA_HUD.user.js`** (baza garantată — merge pe Chrome și Edge fără nicio setare) + permisiuni `userScripts`, `alarms`, `storage` pentru stratul opțional de auto-update; `host_permissions` pe `chatgpt.com`, `127.0.0.1:8765`, `localhost:8765`, `renda.holdings` și `raw.githubusercontent.com` |
+| `background.js` | Service worker, trei roluri: (1) conexiunea la RENDA: ține cheia API și o atașează cererilor spre RENDA; (2) proxy spre serverul HUD local `127.0.0.1:8765` și spre RENDA (echivalentul `GM_xmlhttpRequest` + `@connect`); (3) la 10 min aduce userscript-ul de pe GitHub și, dacă `@version` e mai nou (semver), îl re-înregistrează prin `chrome.userScripts` — niciodată downgrade |
+| `manifest.json` | MV3 HIBRID: **`content_scripts` injectează direct `CHATGPT_RENDA_HUD.user.js`** (baza garantată — merge pe Chrome și Edge fără nicio setare) + permisiuni `userScripts`, `alarms`, `storage` pentru stratul opțional de auto-update și `identity` pentru conectarea la RENDA; `host_permissions` pe `chatgpt.com`, `127.0.0.1:8765`, `localhost:8765`, `renda.holdings` și `raw.githubusercontent.com` |
 | `bootstrap.ps1` + `remote_install.bat` | Instalarea „de la zero", dintr-un singur fișier: descarcă repo-ul ca ZIP (fără git), îl pune în `D:\apps\renda-hud-chatgpt`, copiază calea în clipboard și deschide `chrome://extensions`. NU instalează niciun task; dacă găsește task-ul VECHI de update (de la instalările inițiale), îl șterge automat |
-| `sterge-task-vechi.bat` | Curățare pentru cine a instalat versiunile inițiale: șterge task-ul Windows „RENDA HUD Extension AutoUpdate" (mecanismul vechi de update, înlocuit de cel din browser). Dublu-click, sigur de rulat oricând |
 | `icon128.png` | Iconul oficial RENDA |
+| `CHANGELOG.md` | Istoricul versiunilor (mutat din antetul userscript-ului la v4.37.0) |
+| `tests/` | Teste `node --test` (fără dependențe): integritatea pachetului și `background.js` cu `chrome` simulat |
+| `docs/SERVER_SPEC_HUD.md` | Ce îi trebuie serverului RENDA pentru conectare și pentru datele HUD |
+| `docs/HARDCODED.md` | Inventarul valorilor scrise direct în cod și sursa în care ar trebui să stea |
 
 ## Instalare
 
@@ -26,9 +29,9 @@ Dublu-click pe **`remote_install.bat`** → descarcă extensia în `D:\apps\rend
 1. Pornește **Developer mode** (dreapta-sus)
 2. **Load unpacked** → Ctrl+V în bara de cale → Enter → *Select Folder*
 3. Gata — HUD-ul pornește **fără nicio altă setare** (baza = `content_scripts`).
-   Instalatorul armează și **auto-update-ul pe disc**: un task Windows la 10 minute aduce
-   versiunile noi, iar extensia se reîncarcă singură, în Chrome și în Edge. *Opțional*, pe
-   Chrome/Edge 138+, **„Allow user scripts"** pe cardul extensiei adaugă și auto-update-ul din browser.
+   *Opțional*, pe Chrome/Edge 138+, **„Allow user scripts"** pe cardul extensiei pornește
+   auto-update-ul din browser. Fără comutator, versiunile noi vin rulând din nou `remote_install.bat`
+   (apoi Reload pe cardul extensiei).
 
 Apoi deschide chatgpt.com — banda HUD apare sus. Cine folosea userscript-ul în
 Tampermonkey trebuie să-l **dezactiveze** (altfel rulează ambele).
@@ -37,6 +40,64 @@ Tampermonkey trebuie să-l **dezactiveze** (altfel rulează ambele).
 
 Dezarhivezi într-un loc stabil, apoi aceiași pași din Chrome (Developer mode →
 Load unpacked; „Allow user scripts" rămâne opțional, doar pentru auto-update).
+
+## Conectare la RENDA
+
+Conectarea are un singur drum: butonul **„Conectează-te la RENDA”** din dreapta barei HUD (sau din
+panoul **Proiecte → ⚙ Conexiune**) deschide RENDA într-o fereastră. Când ești conectat, în același loc
+apare „Conectat la RENDA · email”.
+Te autentifici (Microsoft sau parolă) și apeși **Connect**. Cheia API se salvează direct în extensie,
+fără nimic de copiat. Fluxul e „connect device” v2: RENDA întoarce un cod de unică folosință, pe care
+extensia îl schimbă pe cheie cu PKCE, deci cheia nu apare niciodată într-o adresă. Cheia apare în
+contul RENDA cu numele „RENDA HUD pe Chrome” și se revocă de acolo („Cheile mele”).
+
+- Cheia stă doar în extensie (`chrome.storage.local`); pagina chatgpt.com nu o vede.
+- **Nu există cheie lipită manual.** Setările vechi din pagină (cheia, URL-ul, șablonul Azure) se șterg
+  la prima pornire, iar o cheie care n-a venit prin buton se șterge și din extensie.
+- Butonul cere pe server Faza 2 din [docs/SERVER_SPEC_HUD.md](docs/SERVER_SPEC_HUD.md), deployată.
+
+### Ce vine din RENDA și ce e în cod
+
+**Extensia nu mai conține date ale organizației.** După conectare, totul vine din RENDA și rămâne în
+cache până la „Deconectează”:
+
+| Din RENDA | Rută |
+|---|---|
+| rolul, misiunea, modelul de rol și boot-ul personal | `/api/hud/me` |
+| agenții GPT, skills, plugin-urile, SHKN, Tezele VEGO, modelele de rol, pașii boot-ului, misiunile pe categorie, blocul BOOT general, șablonul Azure | `/api/hud/config` |
+| canonul (rezervă când serverul HUD local e oprit) | `/api/hud/canon` |
+
+Fără conectare, panourile Agenți, SHKN, Misiune și tab-ul Misiuni arată „Conectează-te la RENDA”, iar
+primul mesaj pleacă fără bloc BOOT. **În cod rămân** doar textele de interfață: cele 6 șabloane Prompt,
+textul „Ziua mea”, fraza de final a boot-ului și preambulul SHKN.
+
+**Release:** varianta aceasta se publică doar după ce serverul RENDA are fazele 1–8 deployate și datele
+importate (pachetul `renda-hud-seed`). Altfel colegii văd panourile goale.
+
+- În Tampermonkey nu există conectare, deci nici date.
+- Userscript-ul nou poate sosi prin auto-update peste un `background.js` vechi. În acest caz, panoul cere
+  instalarea pachetului nou.
+
+## Tema: închisă / deschisă
+
+Butonul **Temă** din bara HUD trece prin **auto** → **închisă** → **deschisă**. Pe *auto*, HUD-ul urmează
+tema ChatGPT (și se schimbă odată cu ea). Alegerea se ține în browser (`rendaVigiliaTheme`). Tema schimbă
+doar HUD-ul și panourile lui; pagina ChatGPT rămâne pe tema ei. Câmpul de stele din bară își adaptează
+culorile. Macheta: artefactul „RENDA HUD — redesign light/dark”.
+
+**Aspectul (v4.37.0, după machetă, cu fontul de dinainte):** bara pe două rânduri peste câmpul de stele
+(identitate · titlu · CPU/RAM/ceas; apoi pagini · Prompt, Agenți, SHKN, Proiecte, Misiune, Ziua mea,
+Canon cu starea lui · conexiunea la RENDA · Temă), iconițe în locul emoji-urilor, cardul „Misiunea mea”
+cu inițiale, fișa pe două coloane și butoanele principale colorate.
+
+## Teste
+
+```
+node --test
+```
+
+Fără `npm install`. Verifică pachetul (manifest, versiuni, fișiere, că nu intră date ale organizației
+în cod, tema) și `background.js` (conectare, proxy, cache).
 
 ## Cum funcționează auto-update-ul (pur în browser)
 
@@ -54,21 +115,11 @@ site-urile pentru care extensia are `host_permissions` în manifest. De aceea
 `host_permissions` — fără ele, totul pare că merge (înregistrare OK, zero erori)
 dar scriptul nu rulează niciodată în pagină.
 
-## Auto-update pe disc (fără comutator, Chrome și Edge)
+## Fără comutator: actualizare prin reinstalare
 
-Pentru cine nu pornește „Allow user scripts": instalatorul (`remote_install.bat`) înregistrează task-ul Windows
-**„RENDA HUD AutoUpdate"**, care rulează `update.ps1` la 10 minute, fără fereastră. Scriptul citește `version.txt`
-din GitHub; dacă e strict mai nou, descarcă tot pachetul într-un folder temporar, îl verifică (versiuni aliniate,
-puntea de extensie, manifest valid, plasa `content_scripts`) și abia apoi îl copiază peste folderul extensiei,
-scriind `version.txt` ultimul. `background.js` citește `version.txt` de pe disc la fiecare minut și, dacă e mai nou
-decât versiunea care rulează, se reîncarcă singur — în fiecare browser care încarcă acel folder. Orice verificare
-picată = nu se scrie nimic. Jurnal: `update.log`. Oprire: `opreste-auto-update.bat`.
-
-Instalările făcute înainte de v4.36.0 nu au task-ul: se rulează o dată din nou `remote_install.bat`, apoi
-un singur Reload pe cardul extensiei, în fiecare browser (sau repornirea calculatorului; închiderea ferestrei
-nu ajunge mereu, fiindcă Chrome și Edge pot rămâne pornite în fundal). Versiunea veche, aflată încă în memoria
-browserului, nu are codul de reîncărcare proprie; e ultimul gest manual.
-După o actualizare, tab-urile ChatGPT deja deschise cer un F5.
+Extensia nu mai folosește niciun task Windows. Fără „Allow user scripts", HUD-ul rulează versiunea din
+pachet; pentru una nouă se rulează din nou `remote_install.bat`, apoi Reload pe cardul extensiei, în
+fiecare browser. Tab-urile ChatGPT deja deschise cer un F5.
 
 ## De ce HIBRID: `content_scripts` CA BAZĂ + `chrome.userScripts` ca strat de update?
 
@@ -107,6 +158,8 @@ extensie prin `background.js` (max ~10 min). Recomandat: ține și `"version"` d
 
 ## Confidențialitate
 
-Scriptul nu citește și nu transmite conversațiile. Trafic: GET către `127.0.0.1:8765`
-(serverul HUD local, dacă există; `background.js` refuză orice alt URL local) și
-`raw.githubusercontent.com` (descărcarea versiunilor noi).
+Trafic: GET către `127.0.0.1:8765` (serverul HUD local, dacă există; `background.js` refuză orice
+alt URL local), `renda.holdings` (date HUD, doar cu contul conectat) și `raw.githubusercontent.com`
+(descărcarea versiunilor noi). Cu ⚖ Canon pornit, textul din composer (primele 2000 de caractere) merge
+la serverul HUD local pentru selecția canonului, iar HUD-ul adaugă blocul de canon și, la primul mesaj,
+BOOT-ul în mesajul trimis. Conversațiile nu pleacă spre RENDA.

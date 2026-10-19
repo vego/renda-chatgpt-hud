@@ -8,6 +8,8 @@
 //                     138+). Daca lipseste, HUD-ul ruleaza oricum din pachet — se pierde doar
 //                     actualizarea automata, nu functionarea.
 //
+// 0. CONEXIUNEA LA RENDA: cheia API, obtinuta DOAR prin butonul de conectare, tinuta doar aici; vezi sectiunea 0.
+//
 // 1. PROXY LOCALHOST: GET-uri catre serverul HUD local (127.0.0.1:8765). Nici lumea izolata a
 //    unui content script, nici lumea USER_SCRIPT nu pot atinge serverul local direct (CORS);
 //    fetch-ul de aici, cu host_permissions, poate. Mesajele sosesc pe onMessage (content
@@ -49,23 +51,251 @@ function hasContentScripts() {
 }
 const BASE_OK = hasContentScripts();
 
-// ---------- 1. proxy localhost ----------
-function onHudMsg(msg, sender, sendResponse) {
-  if (!msg || msg.type !== 'hud_fetch' || !ALLOWED.test(String(msg.url || ''))) {
-    sendResponse({ ok: false, error: 'blocked' });
-    return false;
+// ---------- 0. conexiunea la RENDA (cheia API) ----------
+// v4.37.0 — cheia API RENDA sta DOAR aici, in chrome.storage.local (rv_api_key); nu mai ajunge
+// in pagina (localStorage-ul chatgpt.com e citibil de scripturile OpenAI). Puntea o ataseaza
+// singura cererilor spre RENDA. UN SINGUR DRUM de a o obtine:
+//   - DEVICE-CONNECT v2 (butonul "Conecteaza-te la RENDA"): pagina de connect a RENDA, cu
+//     callback-ul https://<id>.chromiumapp.org/ prins de chrome.identity.launchWebAuthFlow.
+//     Intoarcerea poarta un COD DE UNICA FOLOSINTA, niciodata cheia (decizia HUD-3); codul se
+//     schimba pe cheie cu verificatorul PKCE, pe care doar extensia il stie. Contractul: Faza 2
+//     din docs/SERVER_SPEC_HUD.md.
+// Cheile care nu au venit pe acest drum (lipite manual sau migrate din versiuni vechi) se sterg
+// la pornire (purgeNonDeviceKey), ca "conectat" sa insemne mereu "a apasat butonul".
+// rv_base: adresa RENDA; implicit productia. Se schimba DOAR din consola service worker-ului
+// (chrome.storage.local.set({rv_base:'http://localhost:3000'})), pagina nu are acces la ea.
+const DEFAULT_BASE = 'https://renda.holdings';
+const AUTH_KEYS = ['rv_api_key', 'rv_user', 'rv_key_when', 'rv_key_via'];
+const CACHE_PREFIX = 'rv_cache:';
+const REMOTE_PATH = /^\/api\/hud\/[a-z0-9_\-\/]+$/;   // rv_remote: doar endpoint-urile HUD
+const PASS_HEADERS = ['authorization', 'x-api-key'];  // ce accepta puntea din msg.headers
+
+async function getBase() {
+  try {
+    const s = await chrome.storage.local.get('rv_base');
+    return String(s.rv_base || DEFAULT_BASE).replace(/\/+$/, '');
+  } catch (_) { return DEFAULT_BASE; }
+}
+function sameOrigin(url, base) {
+  try { return new URL(url).origin === new URL(base).origin; } catch (_) { return false; }
+}
+async function getKey() {
+  try { return (await chrome.storage.local.get('rv_api_key')).rv_api_key || ''; } catch (_) { return ''; }
+}
+function unwrap(j) {
+  // plicurile RENDA: {ok,data} / {_s,ok,data} / {success,data}; altfel obiectul insusi
+  return (j && typeof j === 'object' && 'data' in j && ('ok' in j || '_s' in j || 'success' in j)) ? j.data : j;
+}
+function browserName() {
+  try {
+    const brands = (navigator.userAgentData && navigator.userAgentData.brands) || [];
+    if (brands.some((b) => /edge/i.test(b.brand))) return 'Edge';
+  } catch (_) {}
+  return /Edg\//.test(navigator.userAgent || '') ? 'Edge' : 'Chrome';
+}
+
+// Valideaza cheia pe RENDA. {valid:true,user} / {valid:false,error} / {valid:null} (retea).
+async function validateKey(key, base) {
+  try {
+    const res = await fetch(base + '/api/auth/api-key/validate', { method: 'POST', headers: { 'X-API-Key': key }, cache: 'no-store' });
+    if (res.status === 401 || res.status === 403) return { valid: false, error: 'cheie respinsă de RENDA' };
+    if (!res.ok) return { valid: null };
+    const d = unwrap(await res.json());
+    if (d && d.valid === false) return { valid: false, error: d.error || 'cheie invalidă' };
+    const u = (d && d.user) || {};
+    return { valid: true, user: { email: String(u.email || ''), name: String(u.name || '') } };
+  } catch (_) { return { valid: null }; }
+}
+
+async function storeKey(key, user, via) {
+  await chrome.storage.local.set({ rv_api_key: key, rv_user: user || null, rv_key_when: new Date().toISOString(), rv_key_via: via });
+  await clearRemoteCache();
+}
+async function clearRemoteCache() {
+  try {
+    const all = await chrome.storage.local.get(null);
+    const ks = Object.keys(all).filter((k) => k.indexOf(CACHE_PREFIX) === 0);
+    if (ks.length) await chrome.storage.local.remove(ks);
+  } catch (_) {}
+}
+
+// PKCE (RFC 7636, S256): verificatorul = 32 de octeti aleatori in base64url (43 de caractere);
+// provocarea = base64url(SHA-256(verificator)). Doar provocarea pleaca spre RENDA la inceput.
+function b64url(bytes) {
+  let bin = '';
+  new Uint8Array(bytes).forEach((b) => { bin += String.fromCharCode(b); });
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+async function pkcePair() {
+  const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
+  const challenge = b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
+  return { verifier, challenge };
+}
+
+// Citeste raspunsul device-connect v2: callback?code=…&state=… sau ?error=access_denied&state=…
+// Un raspuns care poarta cheia direct (v1) e respins: decizia HUD-3 cere cod.
+function parseConnectRedirect(redirect, state, callback) {
+  let u;
+  try { u = new URL(String(redirect || '')); } catch (_) { return { error: 'răspuns de conectare ilizibil' }; }
+  if (u.origin !== new URL(callback).origin) return { error: 'răspuns de conectare de la altă adresă' };
+  if (u.searchParams.get('state') !== state) return { error: 'răspuns de conectare nepotrivit (state)' };
+  const err = u.searchParams.get('error');
+  if (err) return { error: err === 'access_denied' ? 'conectare refuzată' : 'conectare eșuată: ' + err };
+  if (u.searchParams.has('key')) return { error: 'RENDA a trimis cheia în adresă (flux vechi) — conectare refuzată' };
+  const code = u.searchParams.get('code') || '';
+  if (!/^[A-Za-z0-9_\-]{16,128}$/.test(code)) return { error: 'RENDA nu a trimis un cod de conectare valid' };
+  return { code };
+}
+
+// Schimba codul pe cheie: POST /api/account/device-connect/token (ruta publica; dovada e
+// verificatorul PKCE). Corpul = EXACT { code, code_verifier } (DEVICE_CONNECT_TOKEN_BODY pe server).
+// Raspuns: { key: 'rk_…' }; daca serverul adauga si { account }, il folosim, altfel validam cheia.
+// Codul expira in 120 s si se arde la prima incercare gresita.
+async function exchangeCode(base, code, verifier) {
+  let res;
+  try {
+    res = await fetch(base + '/api/account/device-connect/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store',
+      body: JSON.stringify({ code, code_verifier: verifier })
+    });
+  } catch (_) { return { error: 'RENDA nu răspunde — reîncearcă conectarea' }; }
+  let d = null;
+  try { d = unwrap(await res.json()); } catch (_) {}
+  if (!res.ok) return { error: res.status === 400 ? 'codul de conectare a expirat sau a fost deja folosit — reîncearcă' : 'schimbul codului a eșuat (HTTP ' + res.status + ')' };
+  const key = d && String(d.key || '');
+  if (!key || !/^rk_[A-Za-z0-9_\-]{8,}$/.test(key)) return { error: 'RENDA nu a trimis o cheie validă' };
+  const a = (d && d.account) || null;
+  return { key, user: a ? { email: String(a.email || ''), name: String(a.name || '') } : null };
+}
+
+async function authConnect() {
+  if (!chrome.identity || typeof chrome.identity.launchWebAuthFlow !== 'function') {
+    return { ok: false, error: 'browserul nu permite conectarea din extensie (Chrome/Edge 120+ necesar)' };
+  }
+  const base = await getBase();
+  const state = (crypto.randomUUID() + crypto.randomUUID()).replace(/-/g, '').slice(0, 32);
+  const callback = chrome.identity.getRedirectURL();
+  const device = ('RENDA HUD pe ' + browserName()).slice(0, 60);
+  const pkce = await pkcePair();
+  const url = base + '/rui/app/connect-device?callback=' + encodeURIComponent(callback)
+    + '&state=' + state + '&device=' + encodeURIComponent(device)
+    + '&code_challenge=' + pkce.challenge + '&code_challenge_method=S256';
+  let redirect;
+  try {
+    redirect = await chrome.identity.launchWebAuthFlow({ url, interactive: true });
+  } catch (e) {
+    log('conectare RENDA: ' + (e && e.message));
+    return { ok: false, error: 'fereastra de conectare s-a închis fără cheie' };
+  }
+  const got = parseConnectRedirect(redirect, state, callback);
+  if (got.error) return { ok: false, error: got.error };
+  const ex = await exchangeCode(base, got.code, pkce.verifier);
+  if (ex.error) return { ok: false, error: ex.error };
+  let user = ex.user;
+  if (!user) {   // raspuns fara cont: il aflam din validare (cheia e deja emisa, deci se pastreaza)
+    const v = await validateKey(ex.key, base);
+    if (v.valid === false) return { ok: false, error: v.error };
+    user = v.user || null;
+  }
+  await storeKey(ex.key, user, 'device');
+  log('conectat la RENDA prin device-connect v2' + (user && user.email ? ' (' + user.email.length + ' caractere email)' : ''));
+  return authStatus();
+}
+
+// O cheie care nu vine din device-connect (lipita manual / migrata de v4.37.0-dev) nu mai e acceptata.
+async function purgeNonDeviceKey() {
+  try {
+    const s = await chrome.storage.local.get(['rv_api_key', 'rv_key_via']);
+    if (s.rv_api_key && s.rv_key_via !== 'device') {
+      await chrome.storage.local.remove(AUTH_KEYS);
+      await clearRemoteCache();
+      log('cheie care nu vine din butonul de conectare — stearsa; conectarea se reface din ⚙ Conexiune');
+    }
+  } catch (_) {}
+}
+
+// Starea conexiunii pentru pagina: FARA cheie.
+async function authStatus() {
+  const s = await chrome.storage.local.get(AUTH_KEYS);
+  const u = s.rv_user || {};
+  return { ok: true, connected: !!s.rv_api_key, email: u.email || '', name: u.name || '', when: s.rv_key_when || '', via: s.rv_key_via || '', keysUrl: (await getBase()) + '/ui/#/api-keys' };
+}
+
+// Deconectarea sterge DOAR local: revocarea cheii pe server cere sesiunea de browser RENDA
+// (pagina de chei, keysUrl), nu merge cu Bearer.
+async function authLogout() {
+  await chrome.storage.local.remove(AUTH_KEYS);
+  await clearRemoteCache();
+  return authStatus();
+}
+
+// Date HUD de pe RENDA (/api/hud/*), cu cache in chrome.storage.local. Esecul intoarce
+// cache-ul vechi (stale), ca HUD-ul sa ramana utilizabil offline.
+async function remoteGet(path, ttlMs) {
+  if (!REMOTE_PATH.test(String(path || ''))) return { ok: false, error: 'blocked' };
+  const ck = CACHE_PREFIX + path;
+  const cached = (await chrome.storage.local.get(ck))[ck] || null;
+  const ttl = typeof ttlMs === 'number' ? ttlMs : 600000;
+  if (cached && Date.now() - new Date(cached.when).getTime() < ttl) return { ok: true, data: cached.data, when: cached.when };
+  const key = await getKey();
+  if (!key) return { ok: false, error: 'neconectat', data: cached ? cached.data : null, stale: !!cached };
+  try {
+    const res = await fetch((await getBase()) + path, { headers: { 'Authorization': 'Bearer ' + key }, cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = unwrap(await res.json());
+    const when = new Date().toISOString();
+    await chrome.storage.local.set({ [ck]: { when, data } });
+    return { ok: true, data, when };
+  } catch (e) {
+    return { ok: false, error: (e && e.message) || 'eroare', data: cached ? cached.data : null, when: cached ? cached.when : '', stale: !!cached };
+  }
+}
+
+// ---------- 1. proxy localhost + RENDA ----------
+async function hudFetch(msg) {
+  let url = String(msg.url || '');
+  const base = await getBase();
+  // pagina cere mereu adrese renda.holdings; la test local (rv_base) le mutam pe serverul local
+  if (base !== DEFAULT_BASE && url.indexOf(DEFAULT_BASE + '/') === 0) url = base + url.slice(DEFAULT_BASE.length);
+  const toRenda = sameOrigin(url, base);
+  if (!ALLOWED.test(url) && !toRenda) return { ok: false, error: 'blocked' };
+  // v4.37.0: headerele cerute se transmit (inainte erau aruncate => fara token pe RENDA),
+  // dar numai cele din lista alba; spre RENDA, cheia din storage are prioritate.
+  let headers = {};
+  if (msg.headers && typeof msg.headers === 'object') {
+    Object.keys(msg.headers).forEach((h) => { if (PASS_HEADERS.includes(h.toLowerCase())) headers[h] = String(msg.headers[h]); });
+  }
+  if (toRenda) {
+    const key = await getKey();
+    if (key) headers = { 'Authorization': 'Bearer ' + key };
   }
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), msg.timeout || 1500);
-  fetch(msg.url, { method: 'GET', signal: ctl.signal, cache: 'no-store' })
-    .then((res) => res.text().then((text) => {
-      clearTimeout(timer);
-      sendResponse({ ok: true, status: res.status, text });
-    }))
-    .catch((err) => {
-      clearTimeout(timer);
-      sendResponse({ ok: false, timeout: err && err.name === 'AbortError' });
-    });
+  try {
+    const res = await fetch(url, { method: 'GET', headers, signal: ctl.signal, cache: 'no-store' });
+    const text = await res.text();
+    return { ok: true, status: res.status, text };
+  } catch (err) {
+    return { ok: false, timeout: !!(err && err.name === 'AbortError') };
+  } finally { clearTimeout(timer); }
+}
+
+const HANDLERS = {
+  hud_fetch: hudFetch,
+  rv_auth_connect: () => authConnect(),
+  rv_auth_status: () => authStatus(),
+  rv_auth_logout: () => authLogout(),
+  rv_remote: (m) => remoteGet(m.path, m.ttl)
+};
+// Curatenia de la pornire (purgeNonDeviceKey) trebuie sa se termine INAINTE de orice raspuns:
+// altfel pagina poate vedea o data "conectat" cu o cheie care urmeaza sa fie stearsa.
+let purgeDone = Promise.resolve();
+function onHudMsg(msg, sender, sendResponse) {
+  const h = msg && HANDLERS[msg.type];
+  if (!h) { sendResponse({ ok: false, error: 'blocked' }); return false; }
+  purgeDone.then(() => h(msg))
+    .then((r) => sendResponse(r))
+    .catch((e) => sendResponse({ ok: false, error: (e && e.message) || 'eroare' }));
   return true; // raspuns asincron
 }
 chrome.runtime.onMessage.addListener(onHudMsg);
@@ -112,10 +342,8 @@ async function unregisterStale() {
       log('userScript scos din registru — baza din pachet (content_scripts) acopera aceeasi versiune');
     }
   } catch (e) { log('unregister: ' + (e && e.message)); }
-  registered = false;
 }
 
-let registered = false;      // exista un userScript al nostru inregistrat
 let settled = false;         // stare stabila atinsa in viata acestui service worker
 let ensureInFlight = null;   // anti-cursa: o singura evaluare in zbor
 let warnedNoApi = false;
@@ -165,7 +393,6 @@ async function doEnsureRegistered() {
     }
 
     await registerCode(code, ver);
-    registered = true;
     settled = true;
     return true;
   } catch (e) {
@@ -178,7 +405,7 @@ let lastGithub = 0;
 let infoNoUpdate = false;
 async function checkGithub() {
   if (!chrome.userScripts) {
-    if (!infoNoUpdate) { infoNoUpdate = true; log('auto-update de pe GitHub inactiv (userScripts indisponibil) — HUD-ul ruleaza din pachet; actualizarea vine prin task-ul de pe disc (update.ps1 + version.txt) sau reinstalind pachetul.'); }
+    if (!infoNoUpdate) { infoNoUpdate = true; log('auto-update de pe GitHub inactiv (userScripts indisponibil) — HUD-ul ruleaza din pachet; actualizarea vine prin comutatorul "Allow user scripts" (Chrome/Edge 138+) sau reinstalind pachetul (remote_install.bat).'); }
     return;
   }
   if (Date.now() - lastGithub < GITHUB_EVERY_MS) return;
@@ -195,40 +422,17 @@ async function checkGithub() {
     if (!isNewer(ver, cur)) return;
     await chrome.storage.local.set({ rv_code: code, rv_ver: ver, rv_when: new Date().toISOString() });
     await registerCode(code, ver);
-    registered = true;
     settled = true;
     log('ACTUALIZAT ' + cur + ' -> ' + ver + ' (activ la urmatorul refresh)');
   } catch (e) { log('self-update: ' + (e && e.message)); }
 }
 
-// v4.36.0 — AUTO-UPDATE PE DISC (calea fara comutator, Chrome SI Edge): task-ul Windows
-// "RENDA HUD AutoUpdate" ruleaza update.ps1 la 10 minute; acela aduce pachetul nou din GitHub
-// in folderul extensiei si scrie version.txt ULTIMUL. La extensiile unpacked,
-// chrome-extension://<id>/version.txt se citeste DE PE DISC la fiecare cerere, deci aici vedem
-// versiunea de pe disc fara repornirea browserului. Daca e STRICT mai noua decat cea care
-// ruleaza, ne reincarcam singuri — echivalentul butonului Reload de pe cardul extensiei.
-// Anti-bucla: o singura incercare de reload per versiune (rv_disk_reload in storage). Fara
-// version.txt (instalari vechi) sau la orice eroare: nu se intampla nimic.
-async function checkDisk() {
-  try {
-    const res = await fetch(chrome.runtime.getURL('version.txt'), { cache: 'no-store' });
-    if (!res.ok) return;
-    const onDisk = (await res.text()).trim();
-    const running = chrome.runtime.getManifest().version;
-    if (!/^\d+(\.\d+){1,3}$/.test(onDisk) || !isNewer(onDisk, running)) return;
-    const st = await chrome.storage.local.get('rv_disk_reload');
-    if (st.rv_disk_reload === onDisk) return;
-    await chrome.storage.local.set({ rv_disk_reload: onDisk });
-    log('pe disc e v' + onDisk + ', ruleaza v' + running + ' — ma reincarc singur');
-    chrome.runtime.reload();
-  } catch (_) {}
-}
-
 function ensureAlarm() { chrome.alarms.get(ALARM, (a) => { if (!a) chrome.alarms.create(ALARM, { periodInMinutes: TICK_MIN }); }); }
-async function tick() { checkDisk(); const ok = await ensureRegistered(); if (ok) checkGithub(); }
+async function tick() { const ok = await ensureRegistered(); if (ok) checkGithub(); }
 
 chrome.runtime.onInstalled.addListener(() => {
   settled = false; seedCache = null;   // pachet nou pe disc → re-evalueaza baza vs storage
+  purgeDone = purgeNonDeviceKey();
   ensureAlarm();
   if (chrome.userScripts) chrome.userScripts.unregister({ ids: OLD_IDS }).catch(() => {});
   tick();
@@ -236,4 +440,5 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.runtime.onStartup.addListener(() => { ensureAlarm(); tick(); });
 chrome.alarms.onAlarm.addListener((a) => { if (a.name === ALARM) tick(); });
 ensureAlarm();
+purgeDone = purgeNonDeviceKey();
 tick();

@@ -1,18 +1,13 @@
 # ============================================================================
-# RENDA HUD - BOOTSTRAP: pune extensia pe disc, armeaza auto-update-ul, deschide Chrome.
+# RENDA HUD - BOOTSTRAP: pune extensia pe disc si deschide Chrome.
 # Acest script:
 #   1. descarca arhiva ZIP a repo-ului (branch main) - fara git
 #   2. o pune in D:\apps\renda-hud-chatgpt (sau %LOCALAPPDATA%\apps\... daca nu e D:)
-#   3. inregistreaza task-ul Windows "RENDA HUD AutoUpdate" (update.ps1 la 10 minute,
-#      fara fereastra): aduce versiunile noi pe disc, iar extensia se reincarca singura
-#      in Chrome SI in Edge (ambele incarca acelasi folder) - omul nu mai apasa nimic
-#   4. pune calea in clipboard si deschide chrome://extensions
+#   3. pune calea in clipboard si deschide chrome://extensions
 # Raman cei 2 pasi din browser, O SINGURA DATA (Developer mode / Load unpacked / Ctrl+V).
-# Daca extensia era deja incarcata din acest folder: un singur Reload pe cardul ei, in fiecare
-# browser (sau repornirea calculatorului), O SINGURA DATA - versiunea veche din memorie nu are
-# codul de reincarcare proprie; de la 4.36.0 in sus extensia se reincarca singura. Inchiderea
-# ferestrei nu ajunge mereu: Chrome si Edge pot ramane pornite in fundal.
-# Oprirea auto-update-ului: opreste-auto-update.bat din folderul extensiei.
+# Daca extensia era deja incarcata din acest folder: un Reload pe cardul ei, in fiecare browser.
+# NU instaleaza niciun task Windows. Auto-update-ul vine din browser (comutatorul
+# "Allow user scripts", Chrome/Edge 138+) sau rulind din nou acest instalator.
 # Fisier ASCII-only (PS 5.1 fara BOM = ANSI).
 # ============================================================================
 $ErrorActionPreference = 'Stop'
@@ -51,32 +46,8 @@ Remove-Item $tmpZip, $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
 # (task inexistent = cazul obisnuit) ar deveni eroare fatala in PS 5.1.
 try {
   schtasks /Delete /TN 'RENDA HUD Extension AutoUpdate' /F 2>$null | Out-Null
-  if ($LASTEXITCODE -eq 0) { Write-Host 'Task-ul vechi de auto-update a fost sters (il inlocuieste cel nou).' -ForegroundColor Yellow }
+  if ($LASTEXITCODE -eq 0) { Write-Host 'Task-ul vechi de auto-update a fost sters.' -ForegroundColor Yellow }
 } catch {}
-
-# auto-update pe disc: task per-utilizator, la 10 minute, fara fereastra. Register-ScheduledTask
-# (nu schtasks.exe): fara probleme de ghilimele la cai cu spatii. conhost --headless (Windows 10
-# 1809+) ruleaza PowerShell fara nicio fereastra; pe sisteme mai vechi: -WindowStyle Hidden.
-$taskOk = $false
-try {
-  $upd = Join-Path $dest 'update.ps1'
-  if (Test-Path $upd) {
-    $psArgs = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $upd + '"'
-    if ([Environment]::OSVersion.Version.Build -ge 17763) {
-      $act = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument ('--headless powershell.exe ' + $psArgs)
-    } else {
-      $act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $psArgs
-    }
-    $trg = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) -RepetitionInterval (New-TimeSpan -Minutes 10) -RepetitionDuration (New-TimeSpan -Days 3650)
-    $set = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
-    Register-ScheduledTask -TaskName 'RENDA HUD AutoUpdate' -Action $act -Trigger $trg -Settings $set -Force | Out-Null
-    $taskOk = $true
-    Write-Host 'Auto-update armat: task-ul "RENDA HUD AutoUpdate" (la 10 minute, fara fereastra).' -ForegroundColor Green
-  }
-} catch {
-  Write-Host ('Nu am putut inregistra task-ul de auto-update: ' + $_.Exception.Message) -ForegroundColor Yellow
-  Write-Host 'Extensia merge oricum; actualizarea ramane manuala (ruleaza din nou acest instalator).' -ForegroundColor Yellow
-}
 
 try { Set-Clipboard -Value $dest } catch {}
 $chromeOk = $false
@@ -92,15 +63,10 @@ Write-Host "  1. Porneste 'Developer mode' (dreapta-sus)"
 Write-Host "  2. 'Load unpacked' -> Ctrl+V in bara de cale -> Enter -> Select Folder"
 Write-Host "  (gata - HUD-ul merge fara alte setari; la fel in Edge: edge://extensions)"
 Write-Host "  Daca extensia era DEJA incarcata din acest folder: sari peste cei 2 pasi si apasa"
-Write-Host "  O SINGURA DATA Reload pe cardul ei, in fiecare browser (Chrome si Edge), sau"
-Write-Host "  reporneste calculatorul. E ultima data: de la versiunea 4.36.0 in sus extensia"
-Write-Host "  se reincarca singura."
+Write-Host "  Reload pe cardul ei, in fiecare browser (Chrome si Edge)."
+Write-Host ""
+Write-Host "OPTIONAL - actualizare automata: porneste 'Allow user scripts' pe cardul extensiei"
+Write-Host "  (Chrome/Edge 138+). Fara el, versiunile noi vin rulind din nou acest instalator."
 Write-Host ""
 Write-Host "Apoi deschide https://chatgpt.com - banda HUD apare sus."
-if ($taskOk) {
-  Write-Host "De acum extensia se actualizeaza SINGURA (task la 10 minute + reincarcare proprie)."
-  Write-Host "Dupa o actualizare, tab-urile ChatGPT deja deschise cer un F5."
-} else {
-  Write-Host "Auto-update-ul NU e armat pe acest calculator (vezi mesajul de mai sus)."
-}
 Write-Host "Daca folosesti userscript-ul in Tampermonkey: DEZACTIVEAZA-L (altfel HUD dublu)."
