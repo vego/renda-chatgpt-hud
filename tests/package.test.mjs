@@ -81,23 +81,53 @@ test('registrul BOOT nu mai e in pachet', () => {
 test('niciun set de date al organizatiei in pachet: totul vine din RENDA dupa conectare', () => {
   const empty = {
     RV_AGENTS: '{"agents":[],"external":[],"skills":[]}', RV_SHKN: '{"items":[]}', RV_PLUGINS: '[]',
-    RV_MISSIONS: '[]', RV_BOOT_META: '{"models":[],"steps":[]}', RV_TEZE: '{"title":"TEZELE VEGO","teze":[]}',
-    MIS_MAP: '[]', BOOT_EMBED: '""', CANON_EMBED: '{"reflexe":{},"norme":[],"signals":[],"nucleu":[],"top_n":3}'
+    RV_MISSIONS: '[]', RV_BOOT_META: '{"models":[],"steps":[]}', RV_TEZE: '{"title":"","teze":[]}',
+    MIS_MAP: '[]', BOOT_EMBED: '""', CANON_EMBED: '{"reflexe":{},"norme":[],"signals":[],"nucleu":[],"top_n":3}',
+    TEMPLATES: '[]', RV_L: '{}', RV_LINKS: '[]', RV_BRAND: '{}', RV_TEXTS: '{}', RV_SYNONYMS: '[]', RV_FEATURES: '{}'
   };
   for (const [name, val] of Object.entries(empty)) {
-    assert.ok(us.includes('  let ' + name + ' = ' + val + ';'), name + ' trebuie sa porneasca gol');
+    assert.ok(us.includes('\n  let ' + name + ' = ' + val + ';'), name + ' trebuie sa porneasca gol');
   }
   assert.ok(!/63d29971/.test(us), 'subscriptia Azure inca e in pachet');
   assert.ok(!/Plugin_[0-9a-f]{8}/.test(us), 'ID-uri de plugin ChatGPT inca in pachet');
   assert.ok(!/g-[0-9a-f]{32}/.test(us), 'ID-uri de GPT inca in pachet');
-  assert.ok(us.length < 260000, 'userscript-ul a crescut la ' + us.length + ' octeti — date intrate inapoi?');
+  assert.ok(us.length < 240000, 'userscript-ul a crescut la ' + us.length + ' octeti — date intrate inapoi?');
 });
 
-test('textele de interfata raman in cod (sabloane Prompt, Ziua mea, fraza de final, preambul SHKN)', () => {
-  assert.match(us, /const TEMPLATES = \[/);
-  const tpl = JSON.parse(us.match(/const TEMPLATES = (\[.*\]);$/m)[1]);
-  assert.ok(tpl.length >= 6 && tpl.every((t) => Array.isArray(t) && t.length === 3), 'sabloanele ⚡ Prompt: [titlu, text, grup]');
-  for (const k of ['const RV_DAY_TEXT = ', 'const RV_BOOT_FOOTER = ', 'function shknWrap(']) assert.ok(us.includes(k), k);
+test('HUD-7: extensia nu poarta cuvinte — tot ce afiseaza vine din /api/hud/config (labels), in afara de RV_PRE', () => {
+  for (const gone of ['const RV_DAY_TEXT', 'const RV_BOOT_FOOTER', 'const RV_SYN = [', 'const RV_SYN_LBL', 'const THEME_LABEL', "title: 'HUD VIGILIA'"]) {
+    assert.ok(!us.includes(gone), 'inca in cod: ' + gone);
+  }
+  // textul vizibil: orice sir cu diacritice romanesti in cod (nu in comentarii, CSS, RV_PRE, loguri, selectorii lockdown-ului)
+  const cssA = us.indexOf('const css = String.raw`');
+  const cssB = us.indexOf('`;', cssA);
+  const preA = us.indexOf('const RV_PRE = {');
+  const preB = us.indexOf('};', preA);
+  // fara blocul CSS si fara RV_PRE (cuvintele de dinaintea conectarii), oriunde ar sta ele
+  const cut = (txt, a, b) => txt.slice(0, a) + txt.slice(b);
+  const code = preA < cssA ? cut(cut(us, cssA, cssB), preA, preB) : cut(cut(us, preA, preB), cssA, cssB);
+  const bad = [];
+  code.split('\n').forEach((line, i) => {
+    const t = line.trim();
+    if (t.startsWith('//') || /rvlog\(|console\.|\blog\(|MENU_HIDE|MENU_MARK/.test(line)) return;
+    // regulile si comentariile CSS (al doilea bloc de stil): selectori pe valori din date, nu text afisat
+    if (t.startsWith('#${') || t.startsWith(':root') || t.startsWith('/*') || t.startsWith('*') || t.includes('*/')) return;
+    const strings = line.match(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`[^`]*`/g) || [];
+    strings.forEach((s) => { if (/[ăâîșțĂÂÎȘȚ]/.test(s)) bad.push((i + 1) + ': ' + s.slice(0, 80)); });
+  });
+  assert.deepEqual(bad, [], 'texte vizibile ramase in cod');
+  assert.ok(!/VEGO/.test(code.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n')), 'VEGO apare in cod (in afara comentariilor)');
+  // cheile de cuvinte au forma grup.nume
+  const keys = [...us.matchAll(/data-rvl[tpa]?="([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(keys.length > 40 && keys.every((k) => /^[a-z]+\.[a-z0-9_]+$/.test(k)), 'chei de cuvinte invalide');
+  assert.ok(us.includes('function L(k, vars)') && us.includes('function refreshLabels('), 'lipseste L() / refreshLabels()');
+});
+
+test('HUD-7: comutatorul de organizatie si politica lockdown a organizatiei', () => {
+  assert.ok(us.includes('<select class="rv-org" hidden></select>'), 'lipseste comutatorul din bara');
+  assert.ok(us.includes("type: 'rv_set_org'"), 'comutatorul nu trimite organizatia la background.js');
+  assert.ok(us.includes('if (!RV_FEATURES.skill_lockdown) return;'), 'lockdown-ul nu depinde de organizatie');
+  assert.ok(us.includes("hudDataUrlDefault: 'https://renda.holdings/api/hud/directory'"), 'proiectele nu vin din /api/hud/directory');
 });
 
 test('tema HUD: toate culorile regulilor HUD sunt variabile, cu pereche pentru tema deschisa', () => {

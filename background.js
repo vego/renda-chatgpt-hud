@@ -65,7 +65,12 @@ const BASE_OK = hasContentScripts();
 // rv_base: adresa RENDA; implicit productia. Se schimba DOAR din consola service worker-ului
 // (chrome.storage.local.set({rv_base:'http://localhost:3000'})), pagina nu are acces la ea.
 const DEFAULT_BASE = 'https://renda.holdings';
-const AUTH_KEYS = ['rv_api_key', 'rv_user', 'rv_key_when', 'rv_key_via'];
+const AUTH_KEYS = ['rv_api_key', 'rv_user', 'rv_key_when', 'rv_key_via', 'rv_org'];
+// v4.47.0 — ORGANIZATIA (HUD-7): cheia poate lucra in mai multe organizatii; cea aleasa in comutatorul din HUD
+// pleaca la fiecare cerere spre RENDA in headerul x-renda-tenant (serverul o valideaza). Gol = organizatia
+// implicita a cheii. Cache-ul e pe organizatie: datele uneia nu apar niciodata in alta.
+const ORG_HEADER = 'x-renda-tenant';
+const ORG_ID = /^[A-Za-z0-9_\-]{1,100}$/;
 const CACHE_PREFIX = 'rv_cache:';
 const REMOTE_PATH = /^\/api\/hud\/[a-z0-9_\-\/]+$/;   // rv_remote: doar endpoint-urile HUD
 const PASS_HEADERS = ['authorization', 'x-api-key'];  // ce accepta puntea din msg.headers
@@ -75,6 +80,14 @@ async function getBase() {
     const s = await chrome.storage.local.get('rv_base');
     return String(s.rv_base || DEFAULT_BASE).replace(/\/+$/, '');
   } catch (_) { return DEFAULT_BASE; }
+}
+async function getOrg() {
+  try { return String((await chrome.storage.local.get('rv_org')).rv_org || ''); } catch (_) { return ''; }
+}
+function rendaHeaders(key, org) {
+  const h = { 'Authorization': 'Bearer ' + key };
+  if (org) h[ORG_HEADER] = org;
+  return h;
 }
 function sameOrigin(url, base) {
   try { return new URL(url).origin === new URL(base).origin; } catch (_) { return false; }
@@ -218,7 +231,16 @@ async function purgeNonDeviceKey() {
 async function authStatus() {
   const s = await chrome.storage.local.get(AUTH_KEYS);
   const u = s.rv_user || {};
-  return { ok: true, connected: !!s.rv_api_key, email: u.email || '', name: u.name || '', when: s.rv_key_when || '', via: s.rv_key_via || '', keysUrl: (await getBase()) + '/ui/#/api-keys' };
+  return { ok: true, connected: !!s.rv_api_key, email: u.email || '', name: u.name || '', when: s.rv_key_when || '', via: s.rv_key_via || '', org: s.rv_org || '', keysUrl: (await getBase()) + '/ui/#/api-keys' };
+}
+
+// Comutatorul de organizatie: '' = organizatia implicita a cheii. Cache-ul ramane, fiind pe organizatie.
+async function setOrg(org) {
+  const v = String(org || '');
+  if (v !== '' && !ORG_ID.test(v)) return { ok: false, error: 'organizație invalidă' };
+  if (v === '') await chrome.storage.local.remove('rv_org');
+  else await chrome.storage.local.set({ rv_org: v });
+  return authStatus();
 }
 
 // Deconectarea sterge DOAR local: revocarea cheii pe server cere sesiunea de browser RENDA
@@ -233,14 +255,21 @@ async function authLogout() {
 // cache-ul vechi (stale), ca HUD-ul sa ramana utilizabil offline.
 async function remoteGet(path, ttlMs) {
   if (!REMOTE_PATH.test(String(path || ''))) return { ok: false, error: 'blocked' };
-  const ck = CACHE_PREFIX + path;
+  const org = await getOrg();
+  const ck = CACHE_PREFIX + (org || '-') + ':' + path;
   const cached = (await chrome.storage.local.get(ck))[ck] || null;
   const ttl = typeof ttlMs === 'number' ? ttlMs : 600000;
   if (cached && Date.now() - new Date(cached.when).getTime() < ttl) return { ok: true, data: cached.data, when: cached.when };
   const key = await getKey();
   if (!key) return { ok: false, error: 'neconectat', data: cached ? cached.data : null, stale: !!cached };
   try {
-    const res = await fetch((await getBase()) + path, { headers: { 'Authorization': 'Bearer ' + key }, cache: 'no-store' });
+    const res = await fetch((await getBase()) + path, { headers: rendaHeaders(key, org), cache: 'no-store' });
+    // organizatia aleasa nu mai e a contului (scos din ea): inapoi la organizatia implicita a cheii
+    if (org && (res.status === 403 || res.status === 400)) {
+      await chrome.storage.local.remove('rv_org');
+      log('organizatia aleasa nu mai e accesibila (HTTP ' + res.status + ') — revin la cea implicita');
+      return remoteGet(path, ttlMs);
+    }
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = unwrap(await res.json());
     const when = new Date().toISOString();
@@ -267,7 +296,7 @@ async function hudFetch(msg) {
   }
   if (toRenda) {
     const key = await getKey();
-    if (key) headers = { 'Authorization': 'Bearer ' + key };
+    if (key) headers = rendaHeaders(key, await getOrg());
   }
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), msg.timeout || 1500);
@@ -285,6 +314,7 @@ const HANDLERS = {
   rv_auth_connect: () => authConnect(),
   rv_auth_status: () => authStatus(),
   rv_auth_logout: () => authLogout(),
+  rv_set_org: (m) => setOrg(m.org),
   rv_remote: (m) => remoteGet(m.path, m.ttl)
 };
 // Curatenia de la pornire (purgeNonDeviceKey) trebuie sa se termine INAINTE de orice raspuns:

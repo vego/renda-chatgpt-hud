@@ -219,7 +219,7 @@ test('rv_remote: doar /api/hud/*, cu cache, iar la eroare intoarce cache-ul vech
   assert.equal(stale.ok, false);
   assert.equal(stale.stale, true);
   assert.equal(stale.data.version, 1);
-  assert.ok(store['rv_cache:/api/hud/config']);
+  assert.ok(store['rv_cache:-:/api/hud/config'], 'cache-ul e pe organizatie (- = cea implicita a cheii)');
 });
 
 test('deconectarea sterge cheia si cache-ul, iar rv_remote devine "neconectat"', async () => {
@@ -244,4 +244,45 @@ test('rv_base schimbat (dev local) muta si tinta device-connect si atasarea chei
   assert.equal(calls[1].init.headers.Authorization, 'Bearer rk_secret12345');
   const st = await send({ type: 'rv_auth_status' });
   assert.equal(st.keysUrl, 'http://localhost:3000/ui/#/api-keys');
+});
+
+test('organizatia (HUD-7): aleasa in comutator, pleaca in x-renda-tenant spre RENDA, cu cache separat', async () => {
+  const seen = [];
+  const { send, store, calls } = load({
+    storage: { rv_api_key: 'rk_secret12345', rv_key_via: 'device' },
+    routes: [(u, init) => {
+      if (u !== 'https://renda.holdings/api/hud/config') return undefined;
+      const org = (init.headers || {})['x-renda-tenant'] || '';
+      seen.push(org);
+      return jsonRes(200, { ok: true, data: { org: { id: org || 'implicita' } } });
+    }]
+  });
+  assert.equal((await send({ type: 'rv_set_org', org: 'nu bun!' })).ok, false, 'un id de organizatie invalid e refuzat');
+  const a = await send({ type: 'rv_remote', path: '/api/hud/config', ttl: 60000 });
+  assert.equal(a.data.org.id, 'implicita');
+  const st = await send({ type: 'rv_set_org', org: 'org_b' });
+  assert.equal(st.org, 'org_b');
+  const b = await send({ type: 'rv_remote', path: '/api/hud/config', ttl: 60000 });
+  assert.equal(b.data.org.id, 'org_b', 'organizatia noua nu ia cache-ul celeilalte');
+  assert.deepEqual(seen, ['', 'org_b']);
+  assert.ok(store['rv_cache:-:/api/hud/config'] && store['rv_cache:org_b:/api/hud/config']);
+  // puntea (hud_fetch) trimite si ea organizatia, doar spre RENDA
+  await send({ type: 'hud_fetch', url: 'https://renda.holdings/api/hud/directory' });
+  const last = calls.filter((c) => c.url === 'https://renda.holdings/api/hud/directory').pop();
+  assert.equal(last.init.headers['x-renda-tenant'], 'org_b');
+  // deconectarea uita si organizatia
+  await send({ type: 'rv_auth_logout' });
+  assert.equal(store.rv_org, undefined);
+});
+
+test('organizatia aleasa nu mai e a contului (403): revine la cea implicita si reincearca o data', async () => {
+  const { send, store } = load({
+    storage: { rv_api_key: 'rk_secret12345', rv_key_via: 'device', rv_org: 'fosta' },
+    routes: [(u, init) => u === 'https://renda.holdings/api/hud/config'
+      ? ((init.headers || {})['x-renda-tenant'] ? jsonRes(403, {}) : jsonRes(200, { ok: true, data: { org: { id: 'implicita' } } }))
+      : undefined]
+  });
+  const r = await send({ type: 'rv_remote', path: '/api/hud/config', ttl: 60000 });
+  assert.equal(r.data.org.id, 'implicita');
+  assert.equal(store.rv_org, undefined);
 });
