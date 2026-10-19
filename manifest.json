@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "RENDA VIGILIA HUD pentru ChatGPT",
-  "version": "4.37.0",
+  "version": "4.47.0",
   "description": "Bara RENDA/VIGILIA peste ChatGPT. Canonul citește textul de trimis doar local (HUD 127.0.0.1); conversațiile nu pleacă spre RENDA.",
   "author": "Virgil Profeanu",
   "minimum_chrome_version": "120",

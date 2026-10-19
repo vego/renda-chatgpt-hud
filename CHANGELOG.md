@@ -4,6 +4,37 @@ Mutat din antetul `CHATGPT_RENDA_HUD.user.js` la v4.37.0 (era ~40 KB de comentar
 Cele mai noi versiuni sunt primele. Nota pentru v4.37.0 e în antetul fișierului și aici.
 
 ```text
+v4.47.0 (2026-10-19): COMBINARE — linia locala v4.37.0 (conectare RENDA, date din /api/hud/*, tema deschisa/inchisa) peste
+v4.46.0 de pe GitHub (Virgil Profeanu). Din 4.36.3–4.46.0 raman in cod: reparatiile de layout pentru noul ChatGPT (Chat | Work,
+composer ProseMirror, capsula Chat/Work sub HUD), cautarea noua (inceput de cuvant, sinonime EN, taguri), tab-ul Skills & Plugins pe
+comenzi de invocare (k), SHKN cu numarul fisei si "Propune o fisa noua", sabloanele Prompt pe grupuri. NU raman in cod: fisele SHKN
+0008–0101, inventarul de 252 de comenzi, BOOT v6.3 — merg in pachetul de import (seed) si pe server. Fara auto-update pe disc
+(update.ps1, version.txt si scripturile de Mac scoase, ca in v4.37.0): actualizarile vin din Chrome Web Store.
+
+Versiunile de pe GitHub dintre v4.36.2 si v4.46.0 (din mesajele de commit):
+  2026-09-25 · v4.36.3 — compatibilitate cu noul layout ChatGPT: selectorul Chat/Work nu mai e acoperit de HUD
+  2026-09-25 · v4.36.4 — compatibilitate cu composer-ul nou ChatGPT (Chat | Work, 2026-09): bootul si canonul se injecteaza din nou
+  2026-09-25 · Suport Mac (Chrome si Edge): install-mac.sh, update-mac.sh, opreste-auto-update-mac.sh + README + update.ps1
+  2026-10-11 · v4.36.5 — SHKN: 13 fise noi (0008–0020: suita mediu-ape v2 001–005 + 8 resurse din resurse_prompturi_gpt.zip), antete curatate (EDITIE, titluri, operator, caz, taguri ≤ 30), corpuri verbatim; ACT-0074 + ACT-0076 sigilate 11.10.2026
+  2026-10-11 · v4.36.6 — SHKN: antetele fiselor 0001–0007 curatate (taguri 30 alese la 0001/0003/0004, titluri scurte la 0006/0007, EDITIE cu istoricul publicarii), corpuri neatinse; la cuvantul proprietarului (ACT-0076 §2)
+  2026-10-12 · v4.36.7 — BOOT v6.3: IRS4T la livrabilele cu mandat, linia de apelare a pluginului TrA[I]nsDoing, RENDA Packages apelat cu @ (scenarii, incheiere, recolta), continuitatea cu IRS4T; validat de proprietar 12.10.2026
+  2026-10-12 · v4.36.8 — SHKN: fisa 0021, promptul de activare a recoltei automate prin RENDA Packages (validat de proprietar 12.10.2026)
+  2026-10-12 · v4.36.9 — SHKN: fisele 0022 (prompt de consiliere cu Sfatuitorul VEGO) si 0023 (prompt de coaching cu OMNIA), textele proprietarului verbatim
+  2026-10-12 · v4.37.0 — SHKN: 77 de fise noi (0024–0100) din ghidul «De la cerere la livrabil», editia 2.0: prompturile P01–P60 si P84–P100, corpurile la octet; fisele 0001–0023 neatinse
+  2026-10-13 · v4.38.0 — SHKN: fisa 0101 (promptul general V6 de corectare nedistructiva a studiilor, Mihaela Ceptureanu, verbatim) + numarul fisei pe card si in cautare; fisele 0001–0100 neatinse
+  2026-10-14 · v4.39.0 — SHKN: 15 fise noi (0102–0116) scoase din fisa 0101 (promptul general V6, Mihaela Ceptureanu), editia 2 a 9 fise din ghid, ordinea panoului la procent egal
+  2026-10-14 · v4.40.0 — SHKN: butonul «Propune» (colegii trimit fise adaptate sau noi printr-un fisier descarcat, fara retea si fara AI)
+  2026-10-14 · v4.41.0 — Sabloane RENDA in setari: 16 sabloane pe momente (inceput, in lucru, conversatie lunga, final), fiecare cu fraza omeneasca si randul RENDA:: (TrAInsLingua)
+  2026-10-15 · v4.42.0 — Sabloane RENDA: grupa «zbateri» (5 sabloane pe forma canonica TrA[I]nsUni[Activity], randul RENDA::UNIACTIVITY)
+  2026-10-15 · v4.43.0 — Skills & Plugins din inventarul ChatGPT (15.10.2026): 252 de comenzi de invocare
+  2026-10-15 · v4.44.0 — Skills & Plugins: sinonime si taguri
+  2026-10-15 · v4.44.0 — cautarea: inceput de cuvant si trei litere exacte
+  2026-10-16 · v4.45.0 — Sablon nou S22: IRS4T + DoD canonic, din ce cer in cuvintele mele
+  2026-10-16 · v4.45.0 — S22: pluginul nu se reincarca daca e activ; se incarca numai ce lipseste
+  2026-10-16 · v4.45.0 — S22: locul de scris cu marcajul ..¿ ?.. (nevoia, livrabilul sau partea de livrabil)
+  2026-10-16 · v4.45.0 — S22 pe prima pozitie, la inceput, deasupra «Disciplina RENDA»
+  2026-10-16 · v4.46.0 — Sablon nou S23: DoD pentru o modificare pe ceva care exista (pozitia a doua)
+
 v4.37.0 (2026-09-23): CONECTARE LA RENDA + date de pe server. (1) Buton "🔑 Conecteaza-te la
 RENDA" in ⚙ SETT: device-connect v2 — callback https://<id>.chromiumapp.org/ prins de
 chrome.identity, intoarcere cu COD DE UNICA FOLOSINTA schimbat pe cheie cu PKCE (Faza 2 din

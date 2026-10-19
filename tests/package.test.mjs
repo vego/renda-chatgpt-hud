@@ -95,7 +95,8 @@ test('niciun set de date al organizatiei in pachet: totul vine din RENDA dupa co
 
 test('textele de interfata raman in cod (sabloane Prompt, Ziua mea, fraza de final, preambul SHKN)', () => {
   assert.match(us, /const TEMPLATES = \[/);
-  assert.equal((us.match(/^    \['[^']+',$/gm) || []).length, 6, 'cele 6 sabloane ⚡ Prompt');
+  const tpl = JSON.parse(us.match(/const TEMPLATES = (\[.*\]);$/m)[1]);
+  assert.ok(tpl.length >= 6 && tpl.every((t) => Array.isArray(t) && t.length === 3), 'sabloanele ⚡ Prompt: [titlu, text, grup]');
   for (const k of ['const RV_DAY_TEXT = ', 'const RV_BOOT_FOOTER = ', 'function shknWrap(']) assert.ok(us.includes(k), k);
 });
 
@@ -126,6 +127,6 @@ test('curatenie: fara icon.png nefolosit, fara promisiunea falsa de confidential
   assert.ok(!/const esc = /.test(us), 'o copie locala a lui esc a revenit');
   assert.match(us, /\/\^\(storageexplorer:\|https:\)\/i\.test\(azb\.dataset\.az/, 'butonul Azure trebuie sa accepte doar storageexplorer: / https:');
   assert.ok(existsSync(join(ROOT, 'CHANGELOG.md')), 'istoricul versiunilor lipseste');
-  assert.ok(us.length < 200000, 'userscript-ul a crescut: ' + us.length);
+  assert.ok(us.length < 240000, 'userscript-ul a crescut: ' + us.length);  // 4.47: +sabloanele si functiile din 4.46 (se strange dupa mutarea sabloanelor pe server)
 });
 
