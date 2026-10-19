@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ro" data-theme="dark" class="dark">
+<head><meta charset="utf-8"><title>ChatGPT</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#212121;color:#ececec;font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif}
+  #root{display:flex;height:100vh}
+  aside{width:260px;background:#171717;padding:14px 10px;box-sizing:border-box;font-size:14px;color:#cfcfcf}
+  aside .it{padding:8px 10px;border-radius:8px;margin:2px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  aside .it.on{background:#2f2f2f}
+  aside h6{font-size:12px;color:#8e8e8e;margin:18px 10px 6px;font-weight:500}
+  main{flex:1;display:flex;flex-direction:column;align-items:center;position:relative}
+  .thread{width:100%;max-width:760px;flex:1;padding:40px 24px 0;box-sizing:border-box;font-size:15.5px;line-height:1.65}
+  .u{background:#303030;border-radius:22px;padding:10px 18px;margin:0 0 26px auto;max-width:70%;width:fit-content}
+  .a p{margin:0 0 12px}
+  form{width:100%;max-width:760px;padding:0 24px 26px;box-sizing:border-box}
+  .box{background:#303030;border-radius:28px;padding:16px 20px;display:flex;align-items:center;gap:12px}
+  .box div[contenteditable]{flex:1;outline:none;color:#ececec;min-height:24px}
+  .box button{width:36px;height:36px;border-radius:50%;border:0;background:#ececec;color:#212121;font-size:18px}
+
+  html[data-theme=light],html[data-theme=light] body{background:#fff;color:#0d0d0d}
+  html[data-theme=light] aside{background:#f9f9f9;color:#333}
+  html[data-theme=light] aside .it.on{background:#ececec}
+  html[data-theme=light] .u{background:#f4f4f4}
+  html[data-theme=light] .box{background:#f4f4f4;border:1px solid #e3e3e3}
+  html[data-theme=light] .box div[contenteditable]{color:#0d0d0d}
+  html[data-theme=light] .box button{background:#0d0d0d;color:#fff}
+</style></head>
+<body>
+<div id="root">
+  <aside>
+    <div class="it on">＋ Chat nou</div><div class="it">🔍 Caută</div>
+    <h6>Recent</h6>
+    <div class="it">Plan de lucru — proiect Demo Tower</div>
+    <div class="it">Rezumat ședință coordonare</div>
+    <div class="it">Verificare caiet de sarcini</div>
+    <div class="it">Ofertă servicii proiectare</div>
+    <div class="it">Calendar livrabile Q4</div>
+  </aside>
+  <main>
+    <div class="thread">
+      <div class="u">Fă-mi un plan pentru ziua de azi pe proiectul Demo Tower.</div>
+      <div class="a">
+        <p><b>Plan pentru azi — Demo Tower</b></p>
+        <p>1. <b>09:00–10:30</b> · Revizuire planșe arhitectură, etaj 3–5, cu marcarea neconcordanțelor.</p>
+        <p>2. <b>10:30–12:00</b> · Coordonare cu structura: goluri în planșee, trasee instalații.</p>
+        <p>3. <b>13:00–15:00</b> · Actualizare listă de livrabile și termene în platforma RENDA.</p>
+        <p>4. <b>15:00–16:30</b> · Draft raport de progres pentru beneficiar.</p>
+        <p>5. <b>Seara</b> · Raport scurt: ce s-a livrat, ce rămâne, riscuri.</p>
+      </div>
+    </div>
+    <form><div class="box"><div contenteditable="true" role="textbox" aria-label="Ask ChatGPT" data-composer-markdown></div><button type="submit" aria-label="Send">↑</button></div></form>
+  </main>
+</div>
+<script>
+  // tema paginii demo: ?t=dark|light
+  try {
+    var T = new URLSearchParams(location.search).get('t') || 'dark';
+    document.documentElement.setAttribute('data-theme', T);
+    document.documentElement.className = T;
+    localStorage.setItem('rendaVigiliaTheme', T);
+  } catch (e) {}
+</script>
+<script src="fixture.js"></script>
+<script>
+  // chrome.runtime simulat: raspunde ca background.js (organizatii FICTIVE din fixture.js).
+  // ?c=0 = neconectat; ?org=<id> = organizatia de pornire
+  (function () {
+    var q = new URLSearchParams(location.search);
+    var st = { connected: q.get('c') !== '0', org: q.get('org') || '' };
+    var F = window.RV_FIXTURE;
+    function orgId() { return st.org || 'atelier_demo'; }
+    function status() { return { ok: true, connected: st.connected, email: st.connected ? 'ana.ionescu@exemplu.ro' : '', name: 'Ana Ionescu', org: st.org, keysUrl: 'https://renda.holdings/ui/#/api-keys' }; }
+    function handle(m) {
+      if (m.type === 'rv_auth_status') return status();
+      if (m.type === 'rv_auth_connect') { st.connected = true; return status(); }
+      if (m.type === 'rv_auth_logout') { st.connected = false; st.org = ''; return status(); }
+      if (m.type === 'rv_set_org') { st.org = m.org || ''; return status(); }
+      if (m.type === 'rv_remote') {
+        if (!st.connected) return { ok: false, error: 'neconectat' };
+        if (m.path === '/api/hud/config') return { ok: true, data: F.config[orgId()], when: new Date().toISOString() };
+        if (m.path === '/api/hud/me') return { ok: true, data: F.me[orgId()], when: new Date().toISOString() };
+        return { ok: false, error: 'HTTP 404' };
+      }
+      if (m.type === 'hud_fetch') {
+        if (/\/api\/hud\/directory/.test(m.url) && st.connected) return { ok: true, status: 200, text: JSON.stringify({ ok: true, data: F.directory[orgId()] }) };
+        return { ok: false };
+      }
+      return { ok: false, error: 'blocked' };
+    }
+    window.chrome = window.chrome || {};
+    window.chrome.runtime = { id: 'mock', sendMessage: function (m, cb) { var r = handle(m); setTimeout(function () { cb(r); }, 5); } };
+  })();
+</script>
+<script>var __RENDA_VER__='4.47.0';</script>
+<script src="hud.js"></script>
+<script>
+  // scena pentru capturi: ?s=agenti | shkn | proiecte | prompt | misiune (implicit)
+  setTimeout(function () {
+    var s = new URLSearchParams(location.search).get('s');
+    if (!s || s === 'misiune') return;
+    var close = document.querySelector('#renda-vigilia-mis-panel .pp-close'); if (close) close.click();
+    var sel = { agenti: '.rv-ag-btn', shkn: '.rv-shkn-btn', proiecte: '.rv-sett-btn', prompt: '.rv-pp-btn' }[s];
+    var b = sel && document.querySelector(sel);
+    if (b) b.click();
+  }, 1200);
+</script>
+</body></html>

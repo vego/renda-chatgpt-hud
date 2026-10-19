@@ -1057,9 +1057,16 @@
     #${HUD_ID} .rv-nav .rv-conn { margin-left: auto; height: 30px; border-radius: 15px; border-color: var(--rv-line); background: var(--rv-panel-2); }
     #${HUD_ID} .rv-nav .rv-conn[hidden] { display: none; }
     /* v4.47.0: comutatorul de organizatie (doar cand contul are mai multe) */
-    #${HUD_ID} .rv-nav .rv-org { margin-left: auto; height: 30px; max-width: 220px; padding: 0 10px; border: 1px solid var(--rv-line); border-radius: 15px; background: var(--rv-panel-2); color: var(--rv-text); font: inherit; cursor: pointer; }
+    #${HUD_ID} .rv-nav .rv-org { margin-left: auto; height: 30px; max-width: 170px; padding: 0 10px; border: 1px solid var(--rv-line); border-radius: 15px; background: var(--rv-panel-2); color: var(--rv-text); font: inherit; cursor: pointer; }
     #${HUD_ID} .rv-nav .rv-org[hidden] { display: none; }
+    /* v4.47.0: banda incape in 1280 px — linkul spre serverul HUD local apare doar cand acesta raspunde, tema
+       ramane iconita sub 1500 px (cuvantul ei e in tooltip), iar sub 1400 px dispare eticheta „pagini:” */
+    #${HUD_ID}:not(.rv-local-on) .rv-nav a.renda { display: none; }
+    @media (max-width: 1500px) { #${HUD_ID} .rv-nav .rv-theme-btn .rv-lbl { display: none; } }
+    @media (max-width: 1400px) { #${HUD_ID} .rv-nav .rv-nav-label { display: none; } #${HUD_ID} .rv-nav { padding-left: 12px; padding-right: 12px; } }
     #${HUD_ID} .rv-nav .rv-org:not([hidden]) + .rv-conn { margin-left: 6px; }
+    /* cu comutatorul in bara, emailul ramane doar in tooltip — altfel butonul si tema ies din banda la 1280 px */
+    #${HUD_ID} .rv-nav .rv-org:not([hidden]) + .rv-conn .rv-conn-em, #${HUD_ID} .rv-nav .rv-org:not([hidden]) + .rv-conn .rv-lbl { display: none; }
     /* v4.47.0: inainte de conectare — doar marca, butonul de conectare si tema; panourile ascunse */
     #${HUD_ID}.rv-pre .rv-center, #${HUD_ID}.rv-pre .rv-right, #${HUD_ID}.rv-pre .rv-status, #${HUD_ID}.rv-pre .rv-system,
     #${HUD_ID}.rv-pre .rv-nav > :not(.rv-conn):not(.rv-theme-btn) { display: none !important; }
@@ -1987,7 +1994,7 @@
         const d0 = JSON.parse(txt);
         const d = (d0 && typeof d0 === 'object' && (d0.lists || d0.data)) ? (d0.lists || d0.data) : d0;
         const rawP = Array.isArray(d.projects) ? d.projects : (Array.isArray(d.items) ? d.items : []);
-        const rawE = Array.isArray(d.vego_employees) ? d.vego_employees : (Array.isArray(d.employees) ? d.employees : (Array.isArray(d.users) ? d.users : []));
+        const rawE = Array.isArray(d.employees) ? d.employees : (Array.isArray(d.users) ? d.users : []);
         const data = { projects: rawP.map(normP), employees: rawE.map(normE), when: new Date().toISOString() };
         rvlog('✓ apiFetch', data.projects.length + ' proiecte, ' + data.employees.length + ' angajati');
         setApiData(data);
@@ -3251,6 +3258,7 @@
     function setOffline() {
       sysLog('OFFLINE', '(serverul HUD nu raspunde pe ' + CONFIG.sysmonUrl + ')');
       if (hudNode) { hudNode.textContent = L('sys.offline'); hudNode.classList.remove('online'); }
+      hud.classList.remove('rv-local-on');
       if (hudBar) { hudBar.style.width = '100%'; hudBar.style.background = 'var(--rv-k-offbar)'; }
       if (cpuNode) cpuNode.textContent = '—';
       if (ramNode) ramNode.textContent = '—';
@@ -3271,7 +3279,7 @@
               // serverul HUD e VIU dar samplerul CPU/RAM nu are date (ex. copil sysmon oprit) —
               // stare reala distincta de "server oprit" (onest, nu OFFLINE fals)
               sysLog('LIVE (fara metrici CPU/RAM)');
-              if (hudNode) { hudNode.textContent = L('sys.live'); hudNode.classList.add('online'); }
+              if (hudNode) { hudNode.textContent = L('sys.live'); hudNode.classList.add('online'); } hud.classList.add('rv-local-on');
               if (hudBar) { hudBar.style.width = '100%'; hudBar.style.background = 'var(--rv-green)'; }
               if (cpuNode) cpuNode.textContent = '—';
               if (ramNode) ramNode.textContent = '—';
@@ -3284,7 +3292,7 @@
             const rcpu = Math.round(d.renda_cpu || 0);
             const rram = d.renda_ram_gb || 0;
             sysLog('LIVE', 'CPU ' + cpu + '% / RAM ' + ram + '%');
-            if (hudNode) { hudNode.textContent = L('sys.live'); hudNode.classList.add('online'); }
+            if (hudNode) { hudNode.textContent = L('sys.live'); hudNode.classList.add('online'); } hud.classList.add('rv-local-on');
             if (hudBar) { hudBar.style.width = '100%'; hudBar.style.background = 'var(--rv-green)'; }
             if (cpuNode) cpuNode.textContent = cpu + '% · R ' + rcpu + '%';
             if (ramNode) ramNode.textContent = ram + '% · R ' + rram + 'G';
@@ -3525,7 +3533,7 @@
       connChip.innerHTML = rvAuth.connected
         ? '<span class="rv-conn-dot" aria-hidden="true"></span><span class="rv-lbl">' + esc(L('conn.connected') || RV_PRE.connecting) + '</span>' + (rvAuth.email ? '<span class="rv-conn-em">' + esc(rvAuth.email) + '</span>' : '')
         : rvIcon('key') + '<span class="rv-lbl">' + esc(RV_PRE.connect) + '</span>';
-      connChip.title = rvAuth.connected ? L('conn.connected_title') : RV_PRE.connect_title;
+      connChip.title = rvAuth.connected ? L('conn.connected_title') + (rvAuth.email ? ' · ' + rvAuth.email : '') : RV_PRE.connect_title;
     }
     // v4.47.0 (HUD-7): comutatorul de organizatie — apare cand contul e membru in mai multe. Alegerea pleaca in
     // background.js (headerul x-renda-tenant); datele organizatiei vechi se sterg din pagina si totul se reincarca.
